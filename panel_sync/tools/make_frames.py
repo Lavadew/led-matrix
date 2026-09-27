@@ -35,10 +35,32 @@ for fr in ImageSequence.Iterator(img):
     frames.append(rgb.resize((W, H), Image.BOX))
     durs.append(fr.info.get("duration", img.info.get("duration", 100)) or 100)
 
-fps = a.fps or max(1, round(1000 / (sum(durs) / len(durs))))
+src_count = len(frames)
+if a.fps:
+    fps = a.fps
+elif len(set(durs)) == 1:
+    fps = max(1, round(1000 / durs[0]))
+else:
+    # Frames have different hold times: pick a rate fine enough for the shortest one.
+    fps = max(1, round(1000 / min(durs)))
 if fps > MASTER_FPS:
     print(f"note: GIF wants {fps} fps, Pico clock is {MASTER_FPS}; capping")
     fps = MASTER_FPS
+
+if len(set(durs)) > 1 and not a.fps:
+    # Resample onto a fixed fps grid so long holds stay long and short frames stay short.
+    starts, t = [], 0
+    for d in durs:
+        starts.append(t); t += d
+    n_out = max(1, round(t * fps / 1000))
+    out, j = [], 0
+    for k in range(n_out):
+        tk = k * 1000 / fps
+        while j + 1 < len(starts) and starts[j + 1] <= tk:
+            j += 1
+        out.append(frames[j])
+    frames = out
+    print(f"note: GIF has uneven frame times; resampled {src_count} frames to {len(frames)} at {fps} fps")
 
 pixels = b"".join(f.tobytes() for f in frames)
 total = HEADER.size + len(pixels)
@@ -50,4 +72,12 @@ with open(a.out, "wb") as f:
     f.write(HEADER.pack(b"LEDA", 1, 0, len(frames), W, H, fps, 0, zlib.crc32(pixels)))
     f.write(pixels)
 frames[0].resize((W * 8, H * 8), Image.NEAREST).save(os.path.join(os.path.dirname(a.out) or ".", "preview.png"))
-print(f"{len(frames)} frames, {W}x{H}, {fps} fps, {total // 1024}KB -> {a.out}")
+orig_s = sum(durs) / 1000
+loop_s = len(frames) / fps
+print(f"{os.path.basename(a.gif)}")
+timing = f"{durs[0]} ms/frame" if len(set(durs)) == 1 else f"{min(durs)}-{max(durs)} ms/frame"
+print(f"  original : {w0}x{h0}, {src_count} frame{'s' if src_count != 1 else ''}, {orig_s:.2f} s ({timing})")
+print(f"  on panel : {W}x{H}, {len(frames)} frame{'s' if len(frames) != 1 else ''} @ {fps} fps = {loop_s:.2f} s loop"
+      + (f"  (speed x{orig_s / loop_s:.2f} vs original)" if abs(orig_s - loop_s) > 0.05 else ""))
+print(f"  size     : {total / 1024:.1f} KB of {PARTITION_SIZE // 1024} KB partition ({100 * total / PARTITION_SIZE:.1f}%)")
+print(f"  -> {a.out}")

@@ -245,7 +245,10 @@ esp_err_t render_start(render_state_fn state_fn, int fps)
              BRIGHT, BRIGHTNESS_HARD_MAX, POWER_BUDGET_MA);
 
     frames_load(&anim);
-    ESP_LOGI(TAG, "GIF: %d frames, %dx%d, %d fps (%s)", anim.count, anim.w, anim.h, anim.fps, anim.source);
+    int loop_ms = anim.count * 1000 / anim.fps;
+    ESP_LOGI(TAG, "GIF: %d frames, %dx%d, %d fps, %d.%02d s loop, %d KB (%s)",
+             anim.count, anim.w, anim.h, anim.fps, loop_ms / 1000, (loop_ms % 1000) / 10,
+             anim.count * anim.w * anim.h * 3 / 1024, anim.source);
 
     if (xTaskCreatePinnedToCore(render_task, "render", RENDER_STACK, NULL,
                                 RENDER_PRIO, NULL, RENDER_CORE) != pdPASS)
