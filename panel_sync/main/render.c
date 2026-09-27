@@ -3,6 +3,7 @@
 // same timing, same core, same output. Improvements come as separate commits.
 
 #include <math.h>
+#include <string.h>
 #include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -11,12 +12,14 @@
 #include "led_strip.h"
 #include "frames.h"
 #include "render.h"
+#include "render_limits.h"
 
 #define LED_GPIO          14
 #define PANEL_W           8
 #define PANEL_H           8
 #define LED_COUNT         (PANEL_W * PANEL_H)
-#define BRIGHT            8           // 0-255 brightness cap
+#define BRIGHT            8           // 0-255 brightness scale for content (dim())
+#define POWER_BUDGET_MA   60          // max estimated LED current per panel; frames above it are scaled down
 #define MARKER_US         2000000     // show slot number for 2s after a layout change
 #define REFRESH_MS        10          // pause between refreshes
 
@@ -33,26 +36,53 @@
 // Set to 1 if red shows as green on YOUR board.
 #define LED_ORDER_GRB     0
 
+_Static_assert(BRIGHT <= BRIGHTNESS_HARD_MAX, "BRIGHT must never exceed the hard ceiling (8)");
+
 static const char *TAG = "render";
 static led_strip_handle_t strip;
 static render_state_fn get_state;
 static int master_fps;
 static frame_set_t anim;           // what to play (frames.bin partition or built-in)
 
+// Framebuffer: drawing code writes here in logical (x, y) order. flush() applies the
+// power cap + hard ceiling, maps to the physical LED order and pushes it out.
+static uint8_t fb[LED_COUNT][3];
+static uint32_t power_peak_ua;     // highest pre-limit estimate since last stats print
+static int      power_capped;      // frames scaled down since last stats print
+
 /* ---------- pixel helpers ---------- */
 static inline uint8_t dim(uint8_t v) { return (uint16_t)v * BRIGHT / 255; }
 
 static void px(int x, int y, uint8_t r, uint8_t g, uint8_t b)
 {
-#if MATRIX_SERPENTINE
-    if (y & 1) x = PANEL_W - 1 - x;
-#endif
-    led_strip_set_pixel(strip, y * PANEL_W + x, r, g, b);
+    uint8_t *p = fb[y * PANEL_W + x];
+    p[0] = r; p[1] = g; p[2] = b;
 }
 
 static void clear_all(void)
 {
-    for (int i = 0; i < LED_COUNT; i++) led_strip_set_pixel(strip, i, 0, 0, 0);
+    memset(fb, 0, sizeof fb);
+}
+
+// The ONLY place pixels reach the LEDs: limit, map, serialise, send.
+static void flush(void)
+{
+    int capped;
+    uint32_t est = limit_frame(&fb[0][0], LED_COUNT, POWER_BUDGET_MA * 1000u, &capped);
+    if (est > power_peak_ua) power_peak_ua = est;
+    power_capped += capped;
+
+    for (int y = 0; y < PANEL_H; y++) {
+        for (int x = 0; x < PANEL_W; x++) {
+            const uint8_t *p = fb[y * PANEL_W + x];
+            int lx = x;
+#if MATRIX_SERPENTINE
+            if (y & 1) lx = PANEL_W - 1 - x;
+#endif
+            led_strip_set_pixel(strip, y * PANEL_W + lx, p[0], p[1], p[2]);
+        }
+    }
+    led_strip_refresh(strip);
 }
 
 /* ---------- GIF crop ---------- */
@@ -149,7 +179,7 @@ static void render_task(void *arg)
             if (now - st.frame_rx_us > 1000000) px(0, 0, BRIGHT, 0, 0);   // red corner = lost the Pico
         }
 
-        led_strip_refresh(strip);
+        flush();
         vTaskDelay(pdMS_TO_TICKS(REFRESH_MS));
     }
 }
@@ -176,6 +206,8 @@ esp_err_t render_start(render_state_fn state_fn, int fps)
     };
     esp_err_t err = led_strip_new_rmt_device(&strip_cfg, &rmt_cfg, &strip);
     if (err != ESP_OK) return err;
+    ESP_LOGI(TAG, "brightness: content %d/255, hard ceiling %d, power budget %d mA",
+             BRIGHT, BRIGHTNESS_HARD_MAX, POWER_BUDGET_MA);
 
     frames_load(&anim);
     ESP_LOGI(TAG, "GIF: %d frames, %dx%d, %d fps (%s)", anim.count, anim.w, anim.h, anim.fps, anim.source);
