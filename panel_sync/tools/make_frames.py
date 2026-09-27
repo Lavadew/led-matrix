@@ -79,5 +79,9 @@ timing = f"{durs[0]} ms/frame" if len(set(durs)) == 1 else f"{min(durs)}-{max(du
 print(f"  original : {w0}x{h0}, {src_count} frame{'s' if src_count != 1 else ''}, {orig_s:.2f} s ({timing})")
 print(f"  on panel : {W}x{H}, {len(frames)} frame{'s' if len(frames) != 1 else ''} @ {fps} fps = {loop_s:.2f} s loop"
       + (f"  (speed x{orig_s / loop_s:.2f} vs original)" if abs(orig_s - loop_s) > 0.05 else ""))
-print(f"  size     : {total / 1024:.1f} KB of {PARTITION_SIZE // 1024} KB partition ({100 * total / PARTITION_SIZE:.1f}%)")
+def human(n):
+    return f"{n / 1024 / 1024:.2f} MB" if n >= 1024 * 1024 else f"{n / 1024:.1f} KB"
+print(f"  GIF file : {human(os.path.getsize(a.gif))} on your PC")
+print(f"  on ESP32 : {human(total)} used, {human(PARTITION_SIZE - total)} free "
+      f"of {human(PARTITION_SIZE)} ({100 * total / PARTITION_SIZE:.1f}% used)")
 print(f"  -> {a.out}")
