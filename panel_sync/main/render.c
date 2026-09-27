@@ -20,7 +20,7 @@
 #define PANEL_W           8
 #define PANEL_H           8
 #define LED_COUNT         (PANEL_W * PANEL_H)
-#define BRIGHT            8           // 0-255 brightness scale for content (dim())
+#define BRIGHT            5           // 0-255 brightness scale for content (dim())
 #define POWER_BUDGET_MA   60          // max estimated LED current per panel; frames above it are scaled down
 #define MARKER_US         2000000     // show slot number for 2s after a layout change
 
