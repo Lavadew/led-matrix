@@ -43,11 +43,15 @@ elif len(set(durs)) == 1:
 else:
     # Frames have different hold times: pick a rate fine enough for the shortest one.
     fps = max(1, round(1000 / min(durs)))
-if fps > MASTER_FPS:
-    print(f"note: GIF wants {fps} fps, Pico clock is {MASTER_FPS}; capping")
+avg_fps = src_count * 1000 / sum(durs)
+capped = fps > MASTER_FPS
+if capped:
+    if avg_fps > MASTER_FPS + 0.5:
+        print(f"note: GIF runs at {avg_fps:.0f} fps, Pico clock is {MASTER_FPS}; "
+              f"playing at real speed by skipping frames")
     fps = MASTER_FPS
 
-if len(set(durs)) > 1 and not a.fps:
+if (len(set(durs)) > 1 or capped) and not a.fps:
     # Resample onto a fixed fps grid so long holds stay long and short frames stay short.
     starts, t = [], 0
     for d in durs:
@@ -60,7 +64,7 @@ if len(set(durs)) > 1 and not a.fps:
             j += 1
         out.append(frames[j])
     frames = out
-    print(f"note: GIF has uneven frame times; resampled {src_count} frames to {len(frames)} at {fps} fps")
+    print(f"note: resampled {src_count} frames to {len(frames)} at {fps} fps (keeps real timing)")
 
 pixels = b"".join(f.tobytes() for f in frames)
 total = HEADER.size + len(pixels)
