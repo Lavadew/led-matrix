@@ -15,6 +15,7 @@
 #include "render_limits.h"
 #include "render_timing.h"
 #include "esp_rom_sys.h"
+#include "driver/gpio.h"
 
 #define LED_GPIO          14
 #define PANEL_W           8
@@ -31,6 +32,12 @@
 #define RENDER_PRIO       5
 #define RENDER_STACK      4096
 #define STATS_EVERY_US    5000000     // print timing/power stats every 5s
+
+// CROP TEST (one-board check of multi-panel cropping). 1 = BOOT button cycles:
+//   normal -> pretend slot 1 of 2x2 -> slot 2 -> slot 3 -> slot 4 -> normal
+// Keep 0 for the real wall.
+#define CROP_TEST         0
+#define BOOT_GPIO         0
 
 // If the picture looks scrambled (every other row reversed), set this to 1
 #define MATRIX_SERPENTINE 0
@@ -161,11 +168,44 @@ static void draw_slot_number(int number)
 }
 
 /* ---------- render task ---------- */
+/* ---------- crop test ---------- */
+static int crop_test_slot = -1;          // -1 = off, 0..3 = pretend to be that slot of a 2x2 wall
+
+// Polled once per frame: a press = BOOT low on two frames in a row after being released
+// (frame spacing does the debouncing).
+static void crop_test_poll(void)
+{
+#if CROP_TEST
+    static int low_frames = 0, armed = 1;
+    if (gpio_get_level(BOOT_GPIO) == 0) {
+        if (++low_frames == 2 && armed) {
+            armed = 0;
+            crop_test_slot = (crop_test_slot >= 3) ? -1 : crop_test_slot + 1;
+            if (crop_test_slot < 0) ESP_LOGW(TAG, "CROP TEST: off, back to the real layout");
+            else ESP_LOGW(TAG, "CROP TEST: pretending to be slot %d of a 2x2 wall (%s)", crop_test_slot + 1,
+                          (const char *[]){"top left", "top right", "bottom left", "bottom right"}[crop_test_slot]);
+        }
+    } else {
+        low_frames = 0; armed = 1;
+    }
+#endif
+}
+
 // Draws what the panel should show for frame F at time `at` into the framebuffer.
-static void compose(const render_state_t *st, uint64_t F, int64_t at)
+static void compose(const render_state_t *real, uint64_t F, int64_t at)
 {
     static int     shown_slot = -2, shown_cols = 0, shown_rows = 0;
     static int64_t marker_until = 0;
+
+    render_state_t test_st;
+    const render_state_t *st = real;
+    if (crop_test_slot >= 0) {           // crop test: same clock, fake 2x2 layout
+        test_st = *real;
+        test_st.synced = true; test_st.slot = crop_test_slot;
+        test_st.cols = 2; test_st.rows = 2; test_st.count = 4;
+        if (!real->synced) test_st.frame_rx_us = at;   // no Pico: don't show the lost-Pico corner
+        st = &test_st;
+    }
 
     if (!st->synced) {
         // blinking red = no beacon from the Pico yet
@@ -223,12 +263,13 @@ static void render_task(void *arg)
             int64_t e = clk.last_err < 0 ? -clk.last_err : clk.last_err;
             if (e > err_max) err_max = e;
         } else {
-            F = 0;
             target = (local_next > now) ? local_next : now + period_us;
+            F = (uint64_t)(target / period_us);          // local clock until the Pico is heard
         }
         local_next = target + period_us;
 
         // Draw + limit + serialise ahead of time, then send exactly on the boundary.
+        crop_test_poll();
         compose(&st, F, target);
         prepare();
         int64_t ready = esp_timer_get_time();
@@ -295,6 +336,12 @@ esp_err_t render_start(render_state_fn state_fn, int fps)
         ESP_LOGW(TAG, "tick is %d Hz: frame timing will be coarse. Delete sdkconfig and rebuild "
                       "so sdkconfig.defaults (1000 Hz) applies", configTICK_RATE_HZ);
 
+#if CROP_TEST
+    gpio_config_t io = { .pin_bit_mask = 1ULL << BOOT_GPIO, .mode = GPIO_MODE_INPUT,
+                         .pull_up_en = GPIO_PULLUP_ENABLE };
+    gpio_config(&io);
+    ESP_LOGW(TAG, "CROP TEST mode ON: press BOOT to step through the 4 quarters of a 2x2 wall");
+#endif
     frames_load(&anim);
     int loop_ms = anim.count * 1000 / anim.fps;
     ESP_LOGI(TAG, "GIF: %d frames, %dx%d, %d fps, %d.%02d s loop, %d KB (%s)",
