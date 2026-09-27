@@ -21,12 +21,13 @@
 #define BRIGHT            8           // 0-255 brightness scale for content (dim())
 #define POWER_BUDGET_MA   60          // max estimated LED current per panel; frames above it are scaled down
 #define MARKER_US         2000000     // show slot number for 2s after a layout change
-#define REFRESH_MS        10          // pause between refreshes
+#define REFRESH_MS        10          // frame period: one frame sent every 10ms
 
-// Render task placement. Core 0 + priority 1 is exactly where app_main's loop ran
-// before the move, so behaviour is unchanged. Pinning to core 1 is the next step.
-#define RENDER_CORE       0
-#define RENDER_PRIO       1
+// Render task placement. WiFi and the network tasks run on core 0, so the renderer
+// gets core 1 to itself and can't be delayed by bursts of packets.
+// Set RENDER_CORE 0 to reproduce the old behaviour for before/after measurements.
+#define RENDER_CORE       1
+#define RENDER_PRIO       5
 #define RENDER_STACK      4096
 #define STATS_EVERY_US    5000000     // print timing/power stats every 5s
 
@@ -151,6 +152,7 @@ static void render_task(void *arg)
     int64_t last_send = 0, stats_start = esp_timer_get_time();
     int64_t gap_min = INT64_MAX, gap_max = 0, gap_sum = 0, work_max = 0;
     int     frames = 0;
+    TickType_t wake = xTaskGetTickCount();   // fixed cadence: next frame is due at wake + period
 
     while (1) {
         int64_t loop_start = esp_timer_get_time();
@@ -211,7 +213,9 @@ static void render_task(void *arg)
             stats_start = done;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(REFRESH_MS));
+        // Wait until the NEXT slot, not "10ms from now", so drawing time doesn't
+        // pile up and the frame rate stays steady.
+        xTaskDelayUntil(&wake, pdMS_TO_TICKS(REFRESH_MS));
     }
 }
 
