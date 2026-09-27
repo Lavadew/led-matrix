@@ -28,6 +28,7 @@
 #define RENDER_CORE       0
 #define RENDER_PRIO       1
 #define RENDER_STACK      4096
+#define STATS_EVERY_US    5000000     // print timing/power stats every 5s
 
 // If the picture looks scrambled (every other row reversed), set this to 1
 #define MATRIX_SERPENTINE 0
@@ -145,7 +146,14 @@ static void render_task(void *arg)
     int     shown_slot = -2, shown_cols = 0, shown_rows = 0;
     int64_t marker_until = 0;
 
+    // Timing stats: gap = time between consecutive frames sent to the LEDs,
+    // work = time spent drawing + sending one frame.
+    int64_t last_send = 0, stats_start = esp_timer_get_time();
+    int64_t gap_min = INT64_MAX, gap_max = 0, gap_sum = 0, work_max = 0;
+    int     frames = 0;
+
     while (1) {
+        int64_t loop_start = esp_timer_get_time();
         render_state_t st;
         get_state(&st);
         int64_t now = esp_timer_get_time();
@@ -179,7 +187,30 @@ static void render_task(void *arg)
             if (now - st.frame_rx_us > 1000000) px(0, 0, BRIGHT, 0, 0);   // red corner = lost the Pico
         }
 
+        int64_t send = esp_timer_get_time();
         flush();
+        int64_t done = esp_timer_get_time();
+
+        if (last_send) {
+            int64_t gap = send - last_send;
+            if (gap < gap_min) gap_min = gap;
+            if (gap > gap_max) gap_max = gap;
+            gap_sum += gap;
+            frames++;
+        }
+        last_send = send;
+        if (done - loop_start > work_max) work_max = done - loop_start;
+
+        if (done - stats_start >= STATS_EVERY_US && frames > 0) {
+            ESP_LOGI(TAG, "stats: core %d | frame gap ms min %.2f avg %.2f max %.2f | work max %.2f ms | "
+                          "power peak %" PRIu32 " mA, capped %d/%d frames",
+                     xPortGetCoreID(), gap_min / 1000.0, gap_sum / 1000.0 / frames, gap_max / 1000.0,
+                     work_max / 1000.0, power_peak_ua / 1000, power_capped, frames);
+            gap_min = INT64_MAX; gap_max = gap_sum = work_max = 0; frames = 0;
+            power_peak_ua = 0; power_capped = 0;
+            stats_start = done;
+        }
+
         vTaskDelay(pdMS_TO_TICKS(REFRESH_MS));
     }
 }
