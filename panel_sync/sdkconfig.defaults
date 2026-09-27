@@ -2,3 +2,5 @@
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# FreeRTOS tick 1000 Hz: 1ms scheduling precision for frame-boundary rendering (16.7ms frames at 60fps)
+CONFIG_FREERTOS_HZ=1000

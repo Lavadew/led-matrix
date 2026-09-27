@@ -13,7 +13,6 @@ import argparse, os, struct, sys, zlib
 from PIL import Image, ImageSequence
 
 PARTITION_SIZE = 0x200000        # must match "frames" in partitions.csv
-MASTER_FPS = 30                  # Pico frame clock; can't play faster than this
 HEADER = struct.Struct("<4sBBHHHHHI")   # magic, ver, rsv, count, w, h, fps, rsv, crc32 = 20 bytes
 
 ap = argparse.ArgumentParser()
@@ -21,7 +20,9 @@ ap.add_argument("gif")
 ap.add_argument("--size", type=int, default=32, help="longest side in pixels (default 32)")
 ap.add_argument("--fps", type=int, help="override playback fps")
 ap.add_argument("--out", default="assets/frames.bin")
+ap.add_argument("--clock", type=int, default=30, help="Pico frame clock (FPS in ledwall_sync), default 30")
 a = ap.parse_args()
+MASTER_FPS = a.clock             # can't play faster than the Pico's frame clock
 
 img = Image.open(a.gif)
 w0, h0 = img.size
