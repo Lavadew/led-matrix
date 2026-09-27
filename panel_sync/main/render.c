@@ -200,6 +200,8 @@ static void render_task(void *arg)
 {
     const int64_t period_us = 1000000 / master_fps;
     int64_t local_next = 0;                       // used only before the first beacon
+    static frame_clock_t clk;                     // smoothed estimate of the Pico's frame timing
+    int64_t err_max = 0;                          // biggest beacon-vs-estimate error this window
 
     // Stats. gap = time between frames sent; late = how far past the frame boundary
     // the send actually started (the renderer's contribution to sync error).
@@ -216,7 +218,10 @@ static void render_task(void *arg)
         // When is the next frame due?
         uint64_t F; int64_t target;
         if (st.synced) {
-            next_frame_boundary(st.frame_no, st.frame_rx_us, now, master_fps, &F, &target);
+            frame_clock_update(&clk, st.frame_no, st.frame_rx_us, master_fps);   // beacon = hint
+            frame_clock_next(&clk, now, master_fps, &F, &target);
+            int64_t e = clk.last_err < 0 ? -clk.last_err : clk.last_err;
+            if (e > err_max) err_max = e;
         } else {
             F = 0;
             target = (local_next > now) ? local_next : now + period_us;
@@ -247,14 +252,14 @@ static void render_task(void *arg)
 
         if (sent - stats_start >= STATS_EVERY_US && frames > 0) {
             ESP_LOGI(TAG, "stats: core %d | %.1f fps | frame gap ms min %.2f avg %.2f max %.2f | "
-                          "late us min %lld avg %lld max %lld | work max %.2f ms | "
-                          "power peak %" PRIu32 " mA, capped %d/%d",
+                          "late us min %lld avg %lld max %lld | beacon err max %.1f ms, snaps %d | "
+                          "work max %.2f ms | power peak %" PRIu32 " mA, capped %d/%d",
                      xPortGetCoreID(), frames * 1e6 / (double)(sent - stats_start),
                      gap_min / 1000.0, gap_sum / 1000.0 / frames, gap_max / 1000.0,
                      (long long)late_min, (long long)(late_sum / frames), (long long)late_max,
-                     work_max / 1000.0, power_peak_ua / 1000, power_capped, frames);
+                     err_max / 1000.0, clk.snaps, work_max / 1000.0, power_peak_ua / 1000, power_capped, frames);
             gap_min = late_min = INT64_MAX; gap_max = gap_sum = late_max = late_sum = work_max = 0;
-            frames = 0; power_peak_ua = 0; power_capped = 0;
+            frames = 0; power_peak_ua = 0; power_capped = 0; err_max = 0;
             stats_start = sent;
         }
     }
